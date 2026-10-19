@@ -6,7 +6,7 @@
 
 在 Linux 终端里用自然语言描述你想做的操作，大模型生成候选 shell 命令，**经你确认或修改后**才执行。
 
-[![Python](https://img.shields.io/badge/Python-3.7%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux_Debian%20%7C%20Ubuntu%20%7C%20CentOS%20%7C%20Rocky-blue)](https://github.com)
 [![License](https://img.shields.io/github/license/your-org/nlcmd)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com)
@@ -58,35 +58,51 @@ nl> 查询根目录下名字中包含vscode的文件
 - 💬 **免启动调用**：安装时注入 bash 钩子，在任意 shell 提示符下直接输入中文即可（无需先打开程序）
 - 📜 **脚本编写**：一句"写一个 xx 脚本"，自动在当前目录创建对应文件
 - 🏢 **预设模型模板**：DeepSeek、GLM（智谱）、通义千问、Kimi，以及任意自定义 OpenAI 兼容接口
-- 🚀 **一键部署**：`bash install.sh` 即可，仅依赖 Python 3.7+
+- 🚀 **一键部署**：`bash install.sh` 即可，仅依赖 Python 3.9+
 
 ## 环境要求
 
-- Linux（Debian / Ubuntu / CentOS / Rocky / openEuler 等）
-- Python ≥ 3.7（无系统级编译依赖）
+- Linux（Debian / Ubuntu / CentOS / Rocky / openEuler / 麒麟等）
+- Python ≥ 3.9（无系统级编译依赖）
 - 纯 SSH 终端可用，无需 GUI
 
 ## 安装
 
-### 方式一：一键脚本（推荐）
+新服务器从零开始，三步完成：**传代码 → 跑安装脚本 → 配置 Key**。
+
+### 第 1 步：把项目传到服务器
 
 ```bash
-bash install.sh          # 源码安装（在本仓库目录内）
-nlc                      # 启动，首次运行进入配置向导
+git clone https://github.com/guojiaxian/NLCMD.git
+cd nlcmd
 ```
 
-脚本会自动创建独立虚拟环境，并把 `nlcmd`（及别名 `nlc`）软链接到 `~/.local/bin`，不污染系统 Python。
-
-> 若提示 `~/.local/bin` 不在 PATH，请执行：
-> ```bash
-> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
-> ```
-
-### 方式二：pipx
+### 第 2 步：执行安装脚本
 
 ```bash
-pipx install nlcmd       # 发布到 PyPI 后可用
+bash install.sh
 ```
+
+脚本自动完成：创建独立 venv（`~/.local/share/nlcmd`）→ 安装依赖 → 软链接 `nlcmd`/`nlc` 到 `~/.local/bin` → 注入 bash 钩子到 `~/.bashrc` → 自检，不污染系统 Python。
+
+**唯一前置要求**：Python 3.9+。极简系统镜像可能缺组件，缺什么装什么：
+
+```bash
+# CentOS / Rocky / 麒麟（一般已自带）
+dnf install -y python3 python3-pip
+
+# Debian / Ubuntu 最小镜像
+apt install -y python3 python3-pip python3-venv
+```
+
+### 第 3 步：生效并配置
+
+```bash
+source ~/.bashrc          # 让钩子和 PATH 立即生效（或直接开新终端）
+nlcmd                     # 首次运行进入配置向导
+```
+
+向导里选服务商（如 DeepSeek）→ 粘贴 API Key → 回车测试连通 → 完成。
 
 ### 卸载
 
@@ -94,6 +110,13 @@ pipx install nlcmd       # 发布到 PyPI 后可用
 bash uninstall.sh                # 卸载程序（保留配置）
 bash uninstall.sh --purge        # 卸载程序 + 配置 + 历史
 ```
+
+### 常见问题
+
+- **提示 `nlcmd: 未找到命令`**：PATH 未包含 `~/.local/bin`，执行
+  `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc`
+- **直接输入中文没有反应**：钩子未生效，执行 `source ~/.bashrc` 或重开终端；确认 `~/.bashrc` 中有 `NLCMD_HOOK` 标记
+- **API 返回 404**：检查 `api_base` 是否只填了根路径（如 `https://api.deepseek.com`），不要带 `/chat/completions` 后缀
 
 ## 快速开始
 
@@ -198,14 +221,15 @@ pytest tests/ -q
 nlcmd/
 ├── src/nlcmd/        # 源码
 │   ├── cli.py        # 入口与 REPL 主循环
+│   ├── analyze.py    # AI 结果分析
 │   ├── memory.py     # 跨会话记忆
 │   ├── security.py   # 本地风险检测
 │   ├── diagnose.py   # 失败诊断
 │   └── ...
 ├── docs/             # 需求与设计文档
 ├── tests/            # 单元测试
-├── install.sh        # 一键安装
-└── uninstall.sh      # 卸载
+├── install.sh        # 一键安装（含 bash 钩子注入）
+└── uninstall.sh      # 卸载（含钩子清理）
 ```
 
 ## 文档
