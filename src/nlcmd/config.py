@@ -1,8 +1,9 @@
 """配置管理：加载/保存 TOML 配置、环境变量优先级、首次配置向导。"""
 from __future__ import annotations
 
+import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -10,8 +11,6 @@ try:
     import tomllib  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover
     import tomli as tomllib  # type: ignore
-
-import tomli_w
 
 from .presets import PRESETS
 
@@ -77,23 +76,84 @@ class Config:
         )
 
     def save(self, path: Path) -> None:
-        """保存配置（权限 0600，避免泄露 API Key）。"""
+        """保存配置（带中文备注的 TOML，权限 0600，避免泄露 API Key）。"""
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "general": {
-                "default_provider": self.default_provider,
-                "timeout": self.timeout,
-                "exec_timeout": self.exec_timeout,
-                "history_size": self.history_size,
-                "auto_analyze": self.auto_analyze,
-            },
-            "providers": {k: asdict(v) for k, v in self.providers.items()},
-        }
-        path.write_bytes(tomli_w.dumps(data).encode("utf-8"))
+        path.write_text(self.to_commented_toml(), encoding="utf-8")
         try:
             path.chmod(0o600)
         except OSError:
             pass
+
+    def to_commented_toml(self) -> str:
+        """生成带中文备注的 TOML 文本（保存与 `config edit` 模板共用）。"""
+        lines = [
+            "# ==========================================================",
+            "# nlcmd 配置文件（编辑保存后，下次启动 nlcmd 生效）",
+            "# 也可用命令快捷修改，执行 nlcmd config --help 查看用法",
+            "# ==========================================================",
+            "",
+            "[general]",
+            "# 默认服务商：deepseek / glm / qwen / kimi / custom（或你自定义的名称）",
+            "default_provider = {}".format(_toml_str(self.default_provider)),
+            "# 大模型 API 请求超时（秒）",
+            "timeout = {}".format(_toml_num(self.timeout)),
+            "# 生成命令的执行超时（秒），0 表示不限制",
+            "exec_timeout = {}".format(_toml_num(self.exec_timeout)),
+            "# 会话内保留的执行历史条数",
+            "history_size = {}".format(self.history_size),
+            "# 命令执行成功后是否自动让 AI 分析输出结果（true / false）",
+            "auto_analyze = {}".format(_toml_bool(self.auto_analyze)),
+            "",
+            "# ---------------------- 服务商配置 ----------------------",
+            "# 注意：api_base 只填根路径，不要带 /chat/completions 后缀",
+            "# API Key 优先级：环境变量 NLCMD_API_KEY > 服务商专属变量 > 此处 api_key",
+        ]
+        for name, pc in self.providers.items():
+            preset = PRESETS.get(name)
+            lines += ["", "[providers.{}]".format(name)]
+            if preset:
+                lines.append("# {} 的接入配置".format(preset.name))
+                if preset.key_hint:
+                    lines.append("# API Key 申请地址：{}".format(preset.key_hint))
+            else:
+                lines.append("# 自定义服务商（任意 OpenAI 兼容接口）")
+            lines += [
+                "api_base = {}".format(_toml_str(pc.api_base)),
+                "api_key = {}".format(_toml_str(pc.api_key)),
+                "model = {}".format(_toml_str(pc.model)),
+                "# 关闭思考模式以加速响应（DeepSeek V4+ 等模型支持）",
+                "disable_thinking = {}".format(_toml_bool(pc.disable_thinking)),
+            ]
+        return "\n".join(lines) + "\n"
+
+
+def _toml_str(v) -> str:
+    return json.dumps(str(v), ensure_ascii=False)
+
+
+def _toml_bool(v) -> str:
+    return "true" if v else "false"
+
+
+def _toml_num(v) -> str:
+    if isinstance(v, float):
+        return "{}.0".format(int(v)) if v.is_integer() else repr(v)
+    return str(v)
+
+
+def create_template(path: Path) -> Config:
+    """生成一份带备注的默认配置模板（第一个预设服务商，Key 留空待填）。"""
+    name = next(iter(PRESETS))
+    preset = PRESETS[name]
+    cfg = Config(
+        default_provider=name,
+        providers={name: ProviderConfig(
+            api_base=preset.api_base, api_key="",
+            model=preset.model, disable_thinking=preset.disable_thinking,
+        )},
+    )
+    cfg.save(path)
+    return cfg
 
 
 def effective_api_key(provider_key: str, pc: ProviderConfig) -> str:

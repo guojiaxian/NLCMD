@@ -7,9 +7,32 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from nlcmd.analyze import ANALYZE_PROMPT, build_analysis_messages
+from nlcmd.cli import record_shell_history
 
 
 # ---------------------------------------------------------------- 单元测试
+
+
+def test_record_shell_history_single_line(tmp_path):
+    record_shell_history("ps aux | head -5", state_dir=tmp_path)
+    assert (tmp_path / "shell_history").read_text() == "ps aux | head -5\n"
+
+
+def test_record_shell_history_multiline_escaped(tmp_path):
+    record_shell_history("cat > a.sh <<'EOF'\necho hi\nEOF", state_dir=tmp_path)
+    content = (tmp_path / "shell_history").read_text()
+    assert content == "cat > a.sh <<'EOF'\\necho hi\\nEOF\n"  # 换行转义，仍是一行
+
+
+def test_record_shell_history_appends(tmp_path):
+    record_shell_history("cmd1", state_dir=tmp_path)
+    record_shell_history("cmd2", state_dir=tmp_path)
+    assert (tmp_path / "shell_history").read_text().splitlines() == ["cmd1", "cmd2"]
+
+
+def test_record_shell_history_skips_blank(tmp_path):
+    record_shell_history("   \n  ", state_dir=tmp_path)
+    assert not (tmp_path / "shell_history").exists()
 
 
 def test_build_analysis_messages_basic():
@@ -95,6 +118,11 @@ def test_run_one_shot_with_auto_analyze():
             assert "run-e2e-marker" in p.stdout, p.stdout
             assert "AI 结果分析" in p.stdout, p.stdout
             assert "analyze-ok" in p.stdout, p.stdout
+            # 执行过的命令已写入 shell 历史文件（供 bash 上键导入）
+            hist_file = os.path.join(td, "state", "shell_history")
+            with open(hist_file) as f:
+                hist = f.read()
+            assert "echo run-e2e-marker" in hist, hist
             # 共两次 LLM 调用：生成 + 分析；分析请求带上了命令输出
             assert len(_Handler.calls) == 2
             analysis_req = _Handler.calls[1]

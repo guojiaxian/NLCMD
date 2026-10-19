@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
+import shutil
+import subprocess
 import sys
 from collections import deque
 from dataclasses import dataclass, field
@@ -18,7 +21,15 @@ from rich.table import Table
 
 from . import __version__
 from .analyze import build_analysis_messages
-from .config import Config, default_config_path, effective_api_key, run_wizard
+from .config import (
+    Config,
+    ProviderConfig,
+    create_template,
+    default_config_path,
+    effective_api_key,
+    run_wizard,
+)
+from .presets import PRESETS
 from .diagnose import is_failure, match_error
 from .editor import edit_command
 from .executor import run_command
@@ -47,6 +58,28 @@ def default_state_dir() -> Path:
     xdg = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg) if xdg else Path.home() / ".local" / "state"
     return base / "nlcmd"
+
+
+SHELL_HISTORY_FILE = "shell_history"
+
+
+def record_shell_history(cmd: str, state_dir: Optional[Path] = None) -> None:
+    """把执行过的命令追加到历史文件，供 bash PROMPT_COMMAND 导入上键历史。
+
+    多行命令（如 heredoc 脚本）中的换行转义为字面 \\n，保证一行一条；
+    导入失败静默忽略，绝不能影响命令执行主流程。
+    """
+    try:
+        d = state_dir or default_state_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        line = (cmd or "").replace("\r", "").strip()
+        if not line:
+            return
+        line = line.replace("\n", "\\n")  # 多行命令转义为字面 \n，一行一条
+        with open(d / SHELL_HISTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 @dataclass
@@ -107,8 +140,260 @@ def _split_run_args(argv: List[str]) -> Optional[str]:
     return None
 
 
+CONFIG_USAGE = """[bold]nlcmd config[/bold] — 命令行快捷配置
+
+用法：
+  nlcmd config show                     查看当前配置（API Key 自动脱敏）
+  nlcmd config set <键> <值>            设置配置项
+  nlcmd config test [服务商]            测试连通（默认当前服务商）
+  nlcmd config edit                     用系统编辑器打开配置文件（文件自带中文备注）
+  nlcmd config wizard                   交互式配置向导
+
+可设置的键：
+  default_provider                      默认服务商（如 deepseek / glm / qwen / kimi）
+  timeout / exec_timeout                LLM 超时 / 命令执行超时（秒）
+  history_size                          历史记录条数
+  auto_analyze                          是否自动 AI 分析结果（true/false）
+  providers.<名称>.api_base             接口根路径（不带 /chat/completions）
+  providers.<名称>.api_key              API Key
+  providers.<名称>.model                模型名
+  providers.<名称>.disable_thinking     关闭思考模式加速（true/false）
+
+示例：
+  nlcmd config set auto_analyze false
+  nlcmd config set providers.deepseek.api_key sk-xxxx
+  nlcmd config set default_provider glm
+  nlcmd -c /path/config.toml config show
+"""
+
+
+def _split_config_args(argv: List[str]) -> Optional[List[str]]:
+    """识别首位置参数 `config`，返回其后的子命令参数（无则 None）。全局选项需写在 config 之前。"""
+    i = 0
+    value_flags = {"-p", "--provider", "-m", "--model", "-c", "--config"}
+    while i < len(argv):
+        a = argv[i]
+        if a in value_flags:
+            i += 2
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        if a == "config":
+            rest = argv[i + 1:]
+            del argv[i:]
+            return rest
+        break
+    return None
+
+
+def _coerce_bool(val: str) -> Optional[bool]:
+    v = val.strip().lower()
+    if v in ("1", "true", "yes", "on", "y", "开", "开启"):
+        return True
+    if v in ("0", "false", "no", "off", "n", "关", "关闭"):
+        return False
+    return None
+
+
+def _mask_key(key: str) -> str:
+    if not key:
+        return "（未设置）"
+    if len(key) <= 10:
+        return "****"
+    return key[:6] + "****" + key[-4:]
+
+
+def _new_provider(name: str) -> tuple:
+    """按预设创建服务商配置；未知名称则新建空的自定义服务商。"""
+    preset = PRESETS.get(name)
+    if preset:
+        return ProviderConfig(
+            api_base=preset.api_base, model=preset.model,
+            disable_thinking=preset.disable_thinking,
+        ), "（已按 {} 预设模板初始化）".format(preset.name)
+    return ProviderConfig(), "（新建自定义服务商）"
+
+
+def _config_edit(console: Console, config_path: Path) -> int:
+    """用系统编辑器打开配置文件；文件不存在时先生成带备注的模板。"""
+    if not config_path.is_file():
+        create_template(config_path)
+        console.print("[green]已生成默认配置模板：[/green]{}".format(config_path))
+
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if not editor:
+        for cand in ("vi", "vim", "nano"):
+            if shutil.which(cand):
+                editor = cand
+                break
+    if not editor:
+        console.print("[red]未找到可用编辑器。[/red]请手动编辑：{}".format(config_path))
+        console.print("或设置环境变量，如：[bold]export EDITOR=vim[/bold]")
+        return 1
+
+    console.print("[dim]正在打开 {}（编辑器：{}）...[/dim]".format(config_path, editor))
+    rc = subprocess.call(shlex.split(editor) + [str(config_path)])
+    if rc == 0:
+        console.print("[green]✓ 编辑完成[/green]，配置将在下次启动 nlcmd 时生效。")
+        console.print("可执行 [bold]nlcmd config test[/bold] 验证连通性。")
+    else:
+        console.print("[yellow]编辑器退出码 {}，配置未确认保存。[/yellow]".format(rc))
+    return rc
+
+
+def _handle_config(rest: List[str], console: Console, config_path: Path) -> int:
+    """处理 `nlcmd config ...` 子命令，无需进入交互模式即可完成配置。"""
+    action = rest[0] if rest else "show"
+
+    if action in ("-h", "--help", "help"):
+        console.print(CONFIG_USAGE)
+        return 0
+
+    if action == "wizard":
+        cfg = run_wizard(console, config_path)
+        return 0 if cfg else 1
+
+    if action == "edit":
+        return _config_edit(console, config_path)
+
+    cfg = Config.load(config_path)
+
+    if action == "show":
+        if cfg is None:
+            console.print("[yellow]尚未配置。[/yellow]运行 [bold]nlcmd config wizard[/bold] 开始配置，"
+                          "或用 [bold]nlcmd config set providers.<名称>.api_key <key>[/bold] 快速设置。")
+            return 1
+        table = Table(box=box.SIMPLE, show_header=True, header_style="bold")
+        table.add_column("配置项")
+        table.add_column("值")
+        table.add_row("default_provider", cfg.default_provider)
+        table.add_row("timeout", "{}s".format(cfg.timeout))
+        table.add_row("exec_timeout", "{}s".format(cfg.exec_timeout))
+        table.add_row("history_size", str(cfg.history_size))
+        table.add_row("auto_analyze", "开启" if cfg.auto_analyze else "关闭")
+        for name, pc in cfg.providers.items():
+            preset = PRESETS.get(name)
+            label = "{}（{}）".format(name, preset.name) if preset else name
+            table.add_row("", "")
+            table.add_row("providers.{}".format(label), "")
+            table.add_row("  api_base", pc.api_base or "（未设置）")
+            table.add_row("  api_key", _mask_key(effective_api_key(name, pc)))
+            table.add_row("  model", pc.model or "（未设置）")
+            table.add_row("  disable_thinking", str(pc.disable_thinking))
+        console.print(table)
+        return 0
+
+    if action == "test":
+        if cfg is None:
+            console.print("[red]尚未配置，无法测试。[/red]先运行 [bold]nlcmd config wizard[/bold]")
+            return 1
+        name = rest[1] if len(rest) > 1 else cfg.default_provider
+        if name not in cfg.providers:
+            console.print("[red]未知服务商：{}[/red]（已配置：{}）".format(
+                name, ", ".join(cfg.providers)))
+            return 1
+        pc = cfg.providers[name]
+        client = LLMClient(
+            api_base=pc.api_base, api_key=effective_api_key(name, pc),
+            model=pc.model, timeout=cfg.timeout, name=name,
+            disable_thinking=pc.disable_thinking,
+        )
+        console.print("正在测试 [bold]{}[/bold]（{} / {}）...".format(name, pc.api_base, pc.model))
+        ok, msg = client.test_connection()
+        if ok:
+            console.print("[green]✓ {}[/green]".format(msg or "连接成功"))
+            return 0
+        console.print("[red]✗ 连接失败[/red] · " + msg)
+        return 1
+
+    if action == "set":
+        if len(rest) != 3:
+            console.print(CONFIG_USAGE)
+            return 1
+        key, value = rest[1].strip(), rest[2].strip()
+        if cfg is None:
+            cfg = Config()
+
+        if key.startswith("providers."):
+            parts = key.split(".")
+            valid_fields = ("api_base", "api_key", "model", "disable_thinking")
+            if len(parts) != 3 or parts[2] not in valid_fields:
+                console.print("[red]无效的键：{}[/red]".format(key))
+                console.print("格式：providers.<名称>.<{}>".format("|".join(valid_fields)))
+                return 1
+            name, field = parts[1], parts[2]
+            if name in cfg.providers:
+                pc, note = cfg.providers[name], ""
+            else:
+                pc, note = _new_provider(name)
+            if field == "disable_thinking":
+                b = _coerce_bool(value)
+                if b is None:
+                    console.print("[red]布尔值应为 true/false（或 on/off/1/0）[/red]")
+                    return 1
+                pc.disable_thinking = b
+                shown = str(b)
+            else:
+                setattr(pc, field, value)
+                shown = _mask_key(value) if field == "api_key" else value
+            cfg.providers[name] = pc
+            cfg.save(config_path)
+            console.print("[green]✓ 已保存[/green] {} = {} {}".format(key, shown, note))
+            return 0
+
+        if key == "auto_analyze":
+            b = _coerce_bool(value)
+            if b is None:
+                console.print("[red]布尔值应为 true/false（或 on/off/1/0）[/red]")
+                return 1
+            cfg.auto_analyze = b
+            shown = "开启" if b else "关闭"
+        elif key in ("timeout", "exec_timeout"):
+            try:
+                num = float(value)
+                assert num >= 0
+            except (ValueError, AssertionError):
+                console.print("[red]{} 应为非负数字（秒）[/red]".format(key))
+                return 1
+            setattr(cfg, key, num)
+            shown = "{}s".format(num)
+        elif key == "history_size":
+            try:
+                cfg.history_size = int(value)
+            except ValueError:
+                console.print("[red]history_size 应为整数[/red]")
+                return 1
+            shown = value
+        elif key == "default_provider":
+            name = value
+            if name not in cfg.providers and name not in PRESETS:
+                console.print("[red]未知服务商：{}[/red]（可选：{}）".format(
+                    name, ", ".join(PRESETS)))
+                return 1
+            if name not in cfg.providers:
+                pc, note = _new_provider(name)
+                cfg.providers[name] = pc
+                shown = name + " " + note
+            else:
+                shown = name
+            cfg.default_provider = name
+        else:
+            console.print("[red]未知的配置键：{}[/red]".format(key))
+            console.print(CONFIG_USAGE)
+            return 1
+
+        cfg.save(config_path)
+        console.print("[green]✓ 已保存[/green] {} = {}".format(key, shown))
+        return 0
+
+    console.print(CONFIG_USAGE)
+    return 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+    config_args = _split_config_args(raw_argv)
     one_shot_query = _split_run_args(raw_argv)
     parser = argparse.ArgumentParser(
         prog="nlcmd", description="自然语言 → Shell 命令的终端助手"
@@ -122,6 +407,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     console = Console(no_color=args.no_color)
     config_path = args.config if args.config else default_config_path()
+
+    if config_args is not None:
+        # 命令行快捷配置：无需进入交互模式，空配置也可直接设置
+        return _handle_config(config_args, console, config_path)
 
     cfg = Config.load(config_path)
     if cfg is None:
@@ -391,6 +680,7 @@ def _execute(rt: Runtime, cands: List[Candidate], from_ai: bool = True) -> None:
         render_result(console, res)
         rt.exec_history.append((datetime.now().strftime("%H:%M:%S"), cmd, res.exit_code))
         rt.pending_cmds.append(cmd)
+        record_shell_history(cmd)  # 写入历史文件，bash 钩子导入后上键可查
         # 仅"真的失败"（退出码非零且输出含错误特征，或退出码为 126/127）才进入诊断修复
         if is_failure(res.exit_code, res.output_tail) and not res.interrupted:
             if _recover_from_failure(rt, cmd, res):

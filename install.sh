@@ -66,15 +66,18 @@ case ":$PATH:" in
         ;;
 esac
 
-# 6. 注入 bash 钩子：在任意 shell 提示符下直接输入自然语言即可调用 nlcmd
-#    （原理：输入的中文不是有效命令时，bash 会调用 command_not_found_handle）
+# 6. 注入 bash 钩子：在任意 shell 提示符下直接输入自然语言即可调用 nlcmd，
+#    并把 nlcmd 执行过的命令导入 bash 历史（上键可随时查看）
+#    （原理：输入的中文不是有效命令时，bash 会调用 command_not_found_handle；
+#     PROMPT_COMMAND 在每次出提示符前把 shell_history 新增内容 history -s 进当前会话）
 BASHRC="${HOME}/.bashrc"
 HOOK_START="# >>> NLCMD_HOOK >>>"
 HOOK_END="# <<< NLCMD_HOOK <<<"
-if [ -f "$BASHRC" ] && grep -q "NLCMD_HOOK" "$BASHRC"; then
-    info "bash 钩子已存在，跳过注入"
-else
-    cat >> "$BASHRC" <<HOOK
+if [ -f "$BASHRC" ]; then
+    # 先移除旧版本钩子块，保证升级到最新注入内容
+    sed -i '/>>> NLCMD_HOOK >>>/,/<<< NLCMD_HOOK <<</d' "$BASHRC" 2>/dev/null
+fi
+cat >> "$BASHRC" <<HOOK
 
 $HOOK_START 在提示符下直接输入自然语言，自动交给 nlcmd 生成并执行命令
 command_not_found_handle() {
@@ -85,10 +88,30 @@ command_not_found_handle() {
     echo "bash: \$1：未找到命令" >&2
     return 127
 }
+# 将 nlcmd 执行过的命令导入 bash 历史（按上键可随时查看）
+_nlc_history_import() {
+    local f="\$HOME/.local/state/nlcmd/shell_history"
+    local o="\$HOME/.local/state/nlcmd/.history_offset"
+    [ -f "\$f" ] || return 0
+    local sz cur line
+    sz=\$(stat -c %s "\$f" 2>/dev/null) || return 0
+    cur=0; [ -f "\$o" ] && cur=\$(cat "\$o" 2>/dev/null)
+    if [ "\$sz" -gt "\$cur" ]; then
+        while IFS= read -r line; do
+            [ -n "\$line" ] && history -s "\$line"
+        done < <(tail -c +"\$((cur + 1))" "\$f")
+        echo "\$sz" > "\$o"
+    elif [ "\$sz" -lt "\$cur" ]; then
+        echo "\$sz" > "\$o"
+    fi
+}
+case ":\$PROMPT_COMMAND:" in
+    *"_nlc_history_import"*) : ;;
+    *) PROMPT_COMMAND="_nlc_history_import\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}" ;;
+esac
 $HOOK_END
 HOOK
     info "已注入 bash 钩子到 ~/.bashrc：新终端里可直接输入中文调用（当前终端执行：source ~/.bashrc）"
-fi
 
 # 7. 自检
 if "$BIN_DIR/$APP_NAME" --version >/dev/null 2>&1; then
