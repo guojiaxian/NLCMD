@@ -114,7 +114,7 @@ bash uninstall.sh --purge        # 卸载程序 + 配置 + 历史
 
 ### 常见问题
 
-- **提示 `nlcmd: 未找到命令`**：PATH 未包含 `~/.local/bin`，执行
+- **提示 `nlcmd: 未找到命令`**：安装脚本会自动把 `~/.local/bin` 写入 `~/.bashrc` 并确保登录 shell 能加载；若在旧版本安装的机器上仍找不到，手动执行
   `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc`
 - **直接输入中文没有反应**：钩子未生效，执行 `source ~/.bashrc` 或重开终端；确认 `~/.bashrc` 中有 `NLCMD_HOOK` 标记
 - **按 ↑ 看不到 nlcmd 执行过的命令**：旧版钩子不含历史导入，重新执行 `bash install.sh`（会自动替换旧钩子）后 `source ~/.bashrc`；历史文件在 `~/.local/state/nlcmd/shell_history`
