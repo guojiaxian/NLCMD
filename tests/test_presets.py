@@ -20,3 +20,9 @@ def test_preset_urls():
     assert "bigmodel" in PRESETS["glm"].api_base
     assert "dashscope" in PRESETS["qwen"].api_base
     assert "moonshot" in PRESETS["kimi"].api_base
+
+
+def test_deepseek_preset_v4():
+    p = PRESETS["deepseek"]
+    assert p.model == "deepseek-flash"
+    assert p.disable_thinking is True

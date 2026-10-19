@@ -8,9 +8,12 @@ from nlcmd.llm import LLMClient, LLMError
 
 
 class Handler(BaseHTTPRequestHandler):
+    last_bodies = []  # 记录收到的请求体，供断言 payload 内容
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
+        Handler.last_bodies.append(body)
         if body.get("model") == "bad-key":
             self.send_response(401)
             self.end_headers()
@@ -93,3 +96,19 @@ def test_test_connection_ok(server):
     ok, msg = client.test_connection()
     assert ok
     assert "成功" in msg
+
+
+def test_disable_thinking_payload(server):
+    # 开启 disable_thinking 时，payload 必须带 thinking={"type":"disabled"}（官方文档格式）
+    Handler.last_bodies.clear()
+    client = LLMClient(api_base=server, api_key="k", model="m", timeout=5,
+                       disable_thinking=True)
+    client.chat([{"role": "user", "content": "hi"}])
+    assert Handler.last_bodies[-1]["thinking"] == {"type": "disabled"}
+
+
+def test_thinking_not_sent_by_default(server):
+    Handler.last_bodies.clear()
+    client = LLMClient(api_base=server, api_key="k", model="m", timeout=5)
+    client.chat([{"role": "user", "content": "hi"}])
+    assert "thinking" not in Handler.last_bodies[-1]

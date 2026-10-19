@@ -151,3 +151,19 @@ def render_help(console: Console) -> None:
     table.add_row("!!<命令>", "直接进入编辑行执行 shell 命令（逃生舱）")
     table.add_row("（自然语言）", "描述你想完成的操作，由大模型生成候选命令")
     console.print(table)
+
+
+def render_analysis(console: Console, text: str) -> None:
+    """渲染 AI 结果分析面板（支持表格等 Markdown 元素）。"""
+    from rich.markdown import Markdown
+
+    console.print()
+    console.print(
+        Panel(
+            Markdown(text.strip()),
+            title="AI 结果分析",
+            title_align="left",
+            border_style="cyan",
+            padding=(0, 1),
+        )
+    )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -16,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
+from .analyze import build_analysis_messages
 from .config import Config, default_config_path, effective_api_key, run_wizard
 from .diagnose import is_failure, match_error
 from .editor import edit_command
@@ -30,6 +32,7 @@ from .ui import (
     Selection,
     confirm_dangerous,
     prompt_select,
+    render_analysis,
     render_candidates,
     render_error,
     render_help,
@@ -70,6 +73,7 @@ def _build_client(cfg: Config, provider: str, model: Optional[str] = None) -> LL
         model=model or pc.model,
         timeout=cfg.timeout,
         name=provider,
+        disable_thinking=pc.disable_thinking,
     )
 
 
@@ -79,7 +83,33 @@ def _provider_label(cfg: Config, provider: str, model: str) -> str:
     return "{} @ {}".format(model, name)
 
 
+def _split_run_args(argv: List[str]) -> Optional[str]:
+    """从 argv 中剥离一次性子命令 `run <查询>`，返回查询文本（无则 None）。
+
+    `run` 必须是第一个非选项参数；其后所有参数（含 - 开头者）都视为查询文本，
+    全局选项需写在 run 之前，如：nlcmd -p glm run 查看进程内存占用。
+    """
+    value_flags = {"-p", "--provider", "-m", "--model", "-c", "--config"}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in value_flags:
+            i += 2
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        if a == "run":
+            query = " ".join(argv[i + 1:]).strip()
+            del argv[i:]
+            return query or None
+        break  # 其他位置参数交给 argparse 报错
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    one_shot_query = _split_run_args(raw_argv)
     parser = argparse.ArgumentParser(
         prog="nlcmd", description="自然语言 → Shell 命令的终端助手"
     )
@@ -88,7 +118,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("-c", "--config", type=Path, help="指定配置文件路径")
     parser.add_argument("--no-color", action="store_true", help="禁用彩色输出")
     parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
 
     console = Console(no_color=args.no_color)
     config_path = args.config if args.config else default_config_path()
@@ -129,6 +159,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         exec_history=deque(maxlen=cfg.history_size),
         memory=Memory.load(default_memory_path(state_dir)),
     )
+
+    if one_shot_query is not None:
+        # 一次性模式（供 bash 钩子调用）：处理一条自然语言后退出，不显示欢迎横幅
+        _pipeline(rt, one_shot_query)
+        return 0
 
     render_welcome(console, _provider_label(cfg, provider, model), __version__)
 
@@ -270,7 +305,8 @@ def _run_direct(rt: Runtime, cmd: str) -> None:
     if not cmd:
         rt.console.print("[yellow]用法：!!<shell 命令>[/yellow]")
         return
-    _execute(rt, [Candidate(command=cmd, description="", risk=assess_risk(cmd))])
+    _execute(rt, [Candidate(command=cmd, description="", risk=assess_risk(cmd))],
+             from_ai=False)
 
 
 def _pipeline(rt: Runtime, text: str) -> None:
@@ -336,7 +372,7 @@ def _pipeline(rt: Runtime, text: str) -> None:
         rt.pending_cmds = []
 
 
-def _execute(rt: Runtime, cands: List[Candidate]) -> None:
+def _execute(rt: Runtime, cands: List[Candidate], from_ai: bool = True) -> None:
     console = rt.console
     total = len(cands)
     for n, cand in enumerate(cands, 1):
@@ -359,10 +395,30 @@ def _execute(rt: Runtime, cands: List[Candidate]) -> None:
         if is_failure(res.exit_code, res.output_tail) and not res.interrupted:
             if _recover_from_failure(rt, cmd, res):
                 continue  # 用户已通过修正命令重试，不再追问后续
+        else:
+            # 执行成功且产生输出时，自动让 AI 分析结果（!! 直执行的命令除外）
+            if (from_ai and rt.cfg.auto_analyze and not res.interrupted
+                    and not res.timed_out and res.output_tail.strip()):
+                _analyze_result(rt, rt.pending_query or cmd, cmd, res.output_tail)
         if is_failure(res.exit_code, res.output_tail) and n < total:
             if not _ask_continue(console):
                 console.print("[dim]已停止后续命令[/dim]")
                 return
+
+
+def _analyze_result(rt: Runtime, query: str, cmd: str, output: str) -> None:
+    """把命令输出交给模型做结构化分析并渲染。失败时静默降级，不影响主流程。"""
+    console = rt.console
+    try:
+        with console.status("[bold cyan]正在分析执行结果...[/bold cyan]", spinner="dots"):
+            text = rt.client.chat(build_analysis_messages(query, cmd, output))
+    except LLMError as e:
+        console.print("[dim]结果分析不可用：{}[/dim]".format(e.message))
+        return
+    except KeyboardInterrupt:
+        console.print("[dim]已跳过结果分析[/dim]")
+        return
+    render_analysis(console, text)
 
 
 def _recover_from_failure(rt: Runtime, cmd: str, res) -> bool:

@@ -13,6 +13,11 @@ STATE_DIR="$HOME/.local/state/nlcmd"
 rm -rf "$APP_DIR"
 rm -f "$BIN"
 rm -f "$HOME/.local/bin/nlc"
+# 移除注入到 ~/.bashrc 的 command_not_found_handle 钩子
+if [ -f "$HOME/.bashrc" ] && grep -q "NLCMD_HOOK" "$HOME/.bashrc"; then
+    sed -i '/>>> NLCMD_HOOK >>>/,/<<< NLCMD_HOOK <<</d' "$HOME/.bashrc"
+    echo -e "${GREEN}[✓]${NC} 已移除 ~/.bashrc 中的 nlcmd 钩子"
+fi
 echo -e "${GREEN}[✓]${NC} 已删除程序：$APP_DIR"
 
 if [ "${1:-}" = "--purge" ]; then

@@ -66,9 +66,35 @@ case ":$PATH:" in
         ;;
 esac
 
-# 6. 自检
+# 6. 注入 bash 钩子：在任意 shell 提示符下直接输入自然语言即可调用 nlcmd
+#    （原理：输入的中文不是有效命令时，bash 会调用 command_not_found_handle）
+BASHRC="${HOME}/.bashrc"
+HOOK_START="# >>> NLCMD_HOOK >>>"
+HOOK_END="# <<< NLCMD_HOOK <<<"
+if [ -f "$BASHRC" ] && grep -q "NLCMD_HOOK" "$BASHRC"; then
+    info "bash 钩子已存在，跳过注入"
+else
+    cat >> "$BASHRC" <<HOOK
+
+$HOOK_START 在提示符下直接输入自然语言，自动交给 nlcmd 生成并执行命令
+command_not_found_handle() {
+    if command -v nlcmd >/dev/null 2>&1; then
+        nlcmd run "\$@"
+        return \$?
+    fi
+    echo "bash: \$1：未找到命令" >&2
+    return 127
+}
+$HOOK_END
+HOOK
+    info "已注入 bash 钩子到 ~/.bashrc：新终端里可直接输入中文调用（当前终端执行：source ~/.bashrc）"
+fi
+
+# 7. 自检
 if "$BIN_DIR/$APP_NAME" --version >/dev/null 2>&1; then
-    info "安装成功！输入 $APP_NAME 启动（首次运行将进入配置向导）"
+    info "安装成功！两种用法："
+    echo "    1) 输入 $APP_NAME 进入交互模式"
+    echo "    2) 任意提示符下直接输入自然语言（需 source ~/.bashrc 生效钩子）"
 else
     error "安装自检失败，请检查上方输出"
     exit 1

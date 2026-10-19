@@ -38,6 +38,30 @@ def test_load_invalid_toml_returns_none(tmp_path):
     assert Config.load(path) is None
 
 
+def test_disable_thinking_defaults_from_preset(tmp_path):
+    # deepseek 预设默认关闭思考；配置文件缺省该字段时继承预设值
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[general]\ndefault_provider = "deepseek"\n'
+        '[providers.deepseek]\napi_base = "https://api.deepseek.com"\n'
+        'api_key = "k"\nmodel = "deepseek-flash"\n',
+        encoding="utf-8",
+    )
+    cfg = Config.load(path)
+    assert cfg.providers["deepseek"].disable_thinking is True
+
+    # 显式写 false 时尊重配置文件
+    path2 = tmp_path / "config2.toml"
+    path2.write_text(
+        '[general]\ndefault_provider = "deepseek"\n'
+        '[providers.deepseek]\napi_base = "https://api.deepseek.com"\n'
+        'api_key = "k"\nmodel = "deepseek-flash"\ndisable_thinking = false\n',
+        encoding="utf-8",
+    )
+    cfg2 = Config.load(path2)
+    assert cfg2.providers["deepseek"].disable_thinking is False
+
+
 def test_load_without_providers_returns_none(tmp_path):
     path = tmp_path / "empty.toml"
     path.write_text('[general]\ndefault_provider = "x"\n', encoding="utf-8")

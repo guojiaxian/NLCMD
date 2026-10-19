@@ -30,6 +30,7 @@ class ProviderConfig:
     api_base: str = ""
     api_key: str = ""
     model: str = ""
+    disable_thinking: bool = False   # 关闭思考模式以加速（DeepSeek V4+）
 
 
 @dataclass
@@ -39,6 +40,7 @@ class Config:
     timeout: float = 30.0        # LLM 请求超时（秒）
     exec_timeout: float = 600.0  # 命令执行超时（秒），0 表示不限
     history_size: int = 200
+    auto_analyze: bool = True    # 命令执行成功后自动让 AI 分析输出
 
     @classmethod
     def load(cls, path: Path) -> Optional["Config"]:
@@ -54,10 +56,13 @@ class Config:
         for key, val in (data.get("providers") or {}).items():
             if not isinstance(val, dict):
                 continue
+            preset = PRESETS.get(key)
+            dt_default = preset.disable_thinking if preset else False
             providers[key] = ProviderConfig(
                 api_base=str(val.get("api_base", "")),
                 api_key=str(val.get("api_key", "")),
                 model=str(val.get("model", "")),
+                disable_thinking=bool(val.get("disable_thinking", dt_default)),
             )
         if not providers:
             return None
@@ -68,6 +73,7 @@ class Config:
             timeout=float(general.get("timeout", 30)),
             exec_timeout=float(general.get("exec_timeout", 600)),
             history_size=int(general.get("history_size", 200)),
+            auto_analyze=bool(general.get("auto_analyze", True)),
         )
 
     def save(self, path: Path) -> None:
@@ -79,6 +85,7 @@ class Config:
                 "timeout": self.timeout,
                 "exec_timeout": self.exec_timeout,
                 "history_size": self.history_size,
+                "auto_analyze": self.auto_analyze,
             },
             "providers": {k: asdict(v) for k, v in self.providers.items()},
         }
@@ -176,12 +183,15 @@ def _wizard_loop(console, config_path: Path, keys):
             if not api_key and key == "custom":
                 console.print("[yellow]未填写 API Key（适用于无鉴权的本地服务）[/yellow]")
 
-        pc = ProviderConfig(api_base=api_base.rstrip("/"), api_key=api_key, model=model)
+        pc = ProviderConfig(
+            api_base=api_base.rstrip("/"), api_key=api_key, model=model,
+            disable_thinking=preset.disable_thinking,
+        )
 
         if Confirm.ask("测试连接？", default=True, console=console):
             client = LLMClient(
                 api_base=pc.api_base, api_key=pc.api_key, model=pc.model,
-                timeout=30.0, name=key,
+                timeout=30.0, name=key, disable_thinking=pc.disable_thinking,
             )
             ok, msg = client.test_connection()
             if ok:

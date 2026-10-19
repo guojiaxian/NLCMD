@@ -19,12 +19,14 @@ class LLMClient:
     """统一走 POST {api_base}/chat/completions（OpenAI 兼容格式）。"""
 
     def __init__(self, api_base: str, api_key: str, model: str,
-                 timeout: float = 30.0, name: str = ""):
+                 timeout: float = 30.0, name: str = "",
+                 disable_thinking: bool = False):
         self.api_base = api_base.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
         self.name = name
+        self.disable_thinking = disable_thinking
 
     @property
     def _url(self) -> str:
@@ -42,6 +44,9 @@ class LLMClient:
             "temperature": temperature,
             "stream": False,
         }
+        if self.disable_thinking:
+            # DeepSeek V4+：关闭思考模式以加速响应（其余服务商忽略该字段）
+            payload["thinking"] = {"type": "disabled"}
         try:
             resp = httpx.post(self._url, json=payload, headers=headers, timeout=self.timeout)
         except httpx.TimeoutException:

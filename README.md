@@ -54,6 +54,8 @@ nl> 查询根目录下名字中包含vscode的文件
 - ⏩ **流式输出**：命令输出实时回显，支持超时（默认 600s）与 `Ctrl+C` 中断
 - 🔧 **失败诊断与自动修复**：命令失败后离线给出原因建议，可一键交给模型生成修正命令
 - 🧠 **跨会话记忆**：记住上次会话的意图与执行结果，可直接接续（如"再按文件大小排序"）
+- 📊 **AI 结果分析**：命令执行成功后自动分析输出，给出"结果解读 / 结论 / 建议"结构化总结
+- 💬 **免启动调用**：安装时注入 bash 钩子，在任意 shell 提示符下直接输入中文即可（无需先打开程序）
 - 📜 **脚本编写**：一句"写一个 xx 脚本"，自动在当前目录创建对应文件
 - 🏢 **预设模型模板**：DeepSeek、GLM（智谱）、通义千问、Kimi，以及任意自定义 OpenAI 兼容接口
 - 🚀 **一键部署**：`bash install.sh` 即可，仅依赖 Python 3.7+
@@ -95,11 +97,28 @@ bash uninstall.sh --purge        # 卸载程序 + 配置 + 历史
 
 ## 快速开始
 
+**方式一：免启动直输（推荐，仿 AI Shell 体验）**
+
+安装后 bash 钩子自动注入 `~/.bashrc`（新终端生效），在任意提示符下直接输入：
+
+```bash
+[root@server ~]# 查看当前所有进程占用内存的情况
+# → AI 生成候选 → 选择/编辑 → 执行 → 自动输出 AI 结果分析
+```
+
+**方式二：交互模式**
+
 ```bash
 nlc                       # 启动（或使用 nlcmd）
 > 查询根目录下名字中包含vscode的文件
 > 1                        # 选择 [1] 号候选
-> （编辑命令后回车执行）
+> （编辑命令后回车执行，随后自动展示 AI 结果分析）
+```
+
+**方式三：一次性子命令**
+
+```bash
+nlcmd run 查看当前所有进程占用内存的情况
 ```
 
 首次运行会进入**配置向导**：选择服务商 → 填写 API Key → 一键测试连通。
@@ -110,6 +129,7 @@ nlc                       # 启动（或使用 nlcmd）
 nlcmd                # 启动（自动进入配置向导）
 nlcmd -p glm         # 指定服务商启动
 nlcmd -m glm-4.5     # 指定模型启动
+nlcmd run <自然语言>  # 一次性模式：生成 → 执行 → 分析后退出
 nlc --version
 ```
 
@@ -135,11 +155,13 @@ default_provider = "deepseek"
 timeout = 30          # LLM 请求超时(秒)
 exec_timeout = 600    # 命令执行超时(秒)，0 = 不限
 history_size = 200
+auto_analyze = true   # 命令执行成功后自动 AI 分析输出
 
 [providers.deepseek]
 api_base = "https://api.deepseek.com"
 api_key  = "sk-xxxx"
-model    = "deepseek-chat"
+model    = "deepseek-flash"
+disable_thinking = true   # 关闭思考模式以加速（DeepSeek V4+）
 ```
 
 **API Key 优先级**：环境变量 `NLCMD_API_KEY` > 服务商专属变量（`DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` / `DASHSCOPE_API_KEY` / `MOONSHOT_API_KEY`）> 配置文件。
@@ -148,7 +170,7 @@ model    = "deepseek-chat"
 
 | Key | 名称 | 默认模型 |
 | --- | --- | --- |
-| `deepseek` | DeepSeek | `deepseek-chat` |
+| `deepseek` | DeepSeek | `deepseek-flash`（默认关闭思考模式加速） |
 | `glm` | GLM（智谱） | `glm-4-flash` |
 | `qwen` | 通义千问 | `qwen-plus` |
 | `kimi` | Kimi（月之暗面） | `moonshot-v1-8k` |

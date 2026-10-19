@@ -12,6 +12,7 @@ class ProviderPreset:
     model: str
     key_env: str = ""      # 服务商专属 API Key 环境变量
     key_hint: str = ""     # Key 获取地址提示
+    disable_thinking: bool = False  # 发送 thinking={"type":"disabled"} 关闭思考以加速
 
 
 PRESETS = {
@@ -19,9 +20,10 @@ PRESETS = {
         key="deepseek",
         name="DeepSeek",
         api_base="https://api.deepseek.com",
-        model="deepseek-chat",
+        model="deepseek-flash",
         key_env="DEEPSEEK_API_KEY",
         key_hint="https://platform.deepseek.com",
+        disable_thinking=True,
     ),
     "glm": ProviderPreset(
         key="glm",
