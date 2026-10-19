@@ -236,7 +236,7 @@ def _wizard_loop(console, config_path: Path, keys):
             console.print(f"[green]✓ 已从环境变量 {env_used} 读取到 API Key[/green]")
         else:
             hint = f"（获取：{preset.key_hint}）" if preset.key_hint else ""
-            api_key = Prompt.ask(f"API Key{hint}", password=True, console=console).strip()
+            api_key = Prompt.ask(f"API Key{hint}", console=console).strip()
             if not api_key and key != "custom":
                 console.print("[red]API Key 不能为空[/red]")
                 continue
